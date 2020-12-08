@@ -20,12 +20,12 @@ from utils.torch_utils import select_device, time_synchronized
 from models.models import *
 #from utils.datasets import *
 
+
 def load_classes(path):
     # Loads *.names file at 'path'
     with open(path, 'r') as f:
         names = f.read().split('\n')
     return list(filter(None, names))  # filter removes empty strings (such as last line)
-
 
 
 def test(data,
