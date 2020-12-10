@@ -24,7 +24,7 @@ def entropy_scores(pred, aggr="max"):
     return entropy_score
 
 
-def mutual_information_scores(pred_student, pred_teacher, aggr="max"):
+def mutual_info_scores(pred_student, pred_teacher, aggr="max"):
     """
     Compute the mutual information of the student and teacher predictions using
     the specified aggregate function. The mutual information is defined as

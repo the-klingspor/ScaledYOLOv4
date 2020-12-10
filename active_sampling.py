@@ -17,7 +17,7 @@ from utils.general import (
     scale_coords, xyxy2xywh, clip_coords, plot_images, xywh2xyxy, box_iou, output_to_target, ap_per_class)
 from utils.torch_utils import select_device, time_synchronized
 from test import load_classes
-from active_learning.scoring import entropy, mutual_information
+from active_learning.scoring import entropy, mutual_info_scores
 from active_learning.sampling import top, kmpp, core_set
 
 from models.models import *
@@ -114,7 +114,7 @@ def active_sampling(data,
             score = entropy(pred, aggr)
         elif scoring == "mutual_information":
             pred_teacher = ema(img, augment=augment)[0]
-            score = mutual_information(pred, pred_teacher, aggr)
+            score = mutual_info_scores(pred, pred_teacher, aggr)
         else:
             raise AssertionError("Valid scoring schemes are entropy and mutual"
                                  "information")
