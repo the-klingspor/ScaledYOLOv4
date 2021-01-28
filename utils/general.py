@@ -328,8 +328,8 @@ def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False):
             (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
 
     # Union Area
-    w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1
-    w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1
+    w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + 1e-16
+    w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + 1e-16
     union = (w1 * h1 + 1e-16) + w2 * h2 - inter
 
     iou = inter / union  # iou
