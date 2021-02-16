@@ -18,7 +18,6 @@ from utils.general import (
 from utils.torch_utils import select_device, time_synchronized
 
 from models.models import *
-#from utils.datasets import *
 
 
 def load_classes(path):
@@ -199,11 +198,12 @@ def test(data,
             stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))
 
         # Plot images
-        if batch_i < 1:
+        if batch_i < 5:
             f = Path(save_dir) / ('test_batch%g_gt.jpg' % batch_i)  # filename
             plot_images(img, targets, paths, str(f), names)  # ground truth
             f = Path(save_dir) / ('test_batch%g_pred.jpg' % batch_i)
-            plot_images(img, output_to_target(output, width, height), paths, str(f), names)  # predictions
+            plot_images(img, output_to_target(output, width, height), paths,
+                        str(f), names, conf_thres)  # predictions
 
     # Compute statistics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy
