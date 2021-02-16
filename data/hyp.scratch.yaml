@@ -25,3 +25,4 @@ perspective: 0.0  # image perspective (+/- fraction), range 0-0.001
 flipud: 0.0  # image flip up-down (probability)
 fliplr: 0.5  # image flip left-right (probability)
 mixup: 0.0  # image mixup (probability)
+mosaic: 0.9 # image mosaic (probability)
