@@ -10,6 +10,7 @@ from threading import Thread
 import cv2
 import numpy as np
 import torch
+#import albumentations as A
 from PIL import Image, ExifTags
 from torch.utils.data import Dataset
 from tqdm import tqdm
@@ -306,8 +307,10 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                     f += glob.iglob(p + os.sep + '*.*')
                 else:
                     raise Exception('%s does not exist' % p)
-            self.img_files = sorted(
-                [x.replace('/', os.sep) for x in f if os.path.splitext(x)[-1].lower() in img_formats])
+            #self.img_files = sorted(
+            #    [x.replace('/', os.sep) for x in f if os.path.splitext(x)[-1].lower() in img_formats])
+            # Todo: Test mit entfernter Sortierung
+            self.img_files = [x.replace('/', os.sep) for x in f if os.path.splitext(x)[-1].lower() in img_formats]
         except Exception as e:
             raise Exception('Error loading data from %s: %s\nSee %s' % (path, e, help_url))
 
@@ -323,7 +326,10 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.hyp = hyp
         self.image_weights = image_weights
         self.rect = False if image_weights else rect
-        self.mosaic = self.augment and not self.rect  # load 4 images at a time into a mosaic (only during training)
+        if self.augment and not self.rect:
+            self.mosaic = self.hyp['mosaic']  # load 4 images at a time into a mosaic (only during training)
+        else:
+            self.mosaic = 0
         self.mosaic_border = [-img_size // 2, -img_size // 2]
         self.stride = stride
 
@@ -442,6 +448,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         # Cache dataset labels, check images and read shapes
         x = {}  # dict
         pbar = tqdm(zip(self.img_files, self.label_files), desc='Scanning images', total=len(self.img_files))
+        broken_files = []
         for (img, label) in pbar:
             try:
                 l = []
@@ -458,7 +465,16 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 x[img] = [l, shape]
             except Exception as e:
                 x[img] = None
+                broken_files.append(img)
                 print('WARNING: %s: %s' % (img, e))
+
+        # write file names of broken images into txt file
+        if len(broken_files) > 0:
+            path_broken = os.path.join(os.path.dirname(path), "broken.txt")
+            with open(path_broken, "w+") as file_broken:
+                for img in broken_files:
+                    img_name = os.sep.join(os.path.normpath(img).split(os.sep)[-2:])
+                    file_broken.write(img_name+"\n")
 
         x['hash'] = get_hash(self.label_files + self.img_files)
         torch.save(x, path)  # save for next time
@@ -478,7 +494,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             index = self.indices[index]
 
         hyp = self.hyp
-        if self.mosaic:
+        if random.random() < self.mosaic:
             # Load mosaic
             img, labels = load_mosaic(self, index)
             shapes = None
@@ -905,3 +921,54 @@ def create_folder(path='./new'):
     if os.path.exists(path):
         shutil.rmtree(path)  # delete output folder
     os.makedirs(path)  # make new output folder
+
+'''
+colorAugment = A.Sequential([
+   
+    A.Sequential([
+        light,
+        medium,
+        strong
+        ], p=1)
+    ], p=0.8) 
+
+geometricAugment = A.Sequential([
+    A.augmentations.geometric.transforms.ShiftScaleRotate(
+        shift_limit=0.1,
+        scale_limit=
+    ], p=0.8)
+
+light = A.Sequential([
+    A.RandomBrightnessContrast(p=0.9),    
+    A.RandomGamma(p=0.9),    
+    A.CLAHE(p=0.9),    
+], p=0.8)
+
+medium = A.OneOf([
+    A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=50, val_shift_limit=50, p=1),
+    A.Equalize(p=1),
+    A.ColorJitter(p=1),
+], p=0.4)
+
+strong = A.OneOf([
+    A.ChannelShuffle(p=1),
+    A.ChannelDropout(p=1),
+    A.Solarize(p=1),
+    A.Posterize(p=1)
+], p=0.3)
+
+augment = A.Compose([
+    A.HorizontalFlip(p=0.5),
+    colorAugment,
+    geometricAugment,
+    A.augmentations.transforms.CoarseDropout(
+        max_holes=5,
+        min_holes=1,
+        max_width=120,
+        max_height=120,
+        min_width=40,
+        min_height=40,
+        p=0.2
+    ) 
+] bbox_params=(format='coco', min_visibility=0.3))
+'''
