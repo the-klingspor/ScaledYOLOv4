@@ -1,0 +1,11 @@
+# train and val datasets (image directory or *.txt file with image paths)
+train: ../cvmlfs/data/insect_camera_trap/labeled/dynamic_vision/random_dataset/train_0.1.txt
+val: ../cvmlfs/data/insect_camera_trap/labeled/dynamic_vision/random_dataset/val.txt
+test: ../cvmlfs/data/insect_camera_trap/labeled/dynamic_vision/random_dataset/test.txt
+unlabeled: ../cvmlfs/data/insect_camera_trap/labeled/dynamic_vision/random_dataset/unlabeled_0.1.txt
+
+# number of classes
+nc: 1
+
+# class names
+names: ['insect']
