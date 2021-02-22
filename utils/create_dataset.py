@@ -99,6 +99,88 @@ def split_dataset(path, val_size=0.1, test_size=0.25, split_mode="seq",
                          .format(split_mode))
 
 
+def random_dataset(input_dir, output_dir, start_frac=0.1, end_frac=0.5,
+                   n_interval=9):
+    """
+    Creates a randomised dataset for a starting fraction of the total dataset,
+    end fraction and number of intervals. For example: Given 10.000 labeled
+    and 20,000 unlabeled datapoints, start_frac=0.1, end_frac=0.5, n_interval=9,
+    this method writes 9 pairs of train and unlabeled sets into the output
+    directory.
+    The first contains 1,000 in the labeled set and 29,000 in the unlabeled,
+    the second contains 1,500 in the labeled and 28,500 in the unlabeled and so
+    forth.
+    Every train_xx.txt set contains the imgs of the previous one and a fraction
+    of the paths in the original train.txt that were not used yet.
+
+    :param input_dir: String, path to the input directory containing a
+        train.txt, test.txt, val.txt and unlabeled.txt
+    :param output_dir: String, path to the output directory.
+    :param start_frac: Float, default=0.1. Percentage of the total labeled
+        elements in the smallest randomised set.
+    :param end_frac: Float, default=0.5, Percentage of the total labeled
+        elements in the largest randomised set.
+    :param n_interval: Int, default=9. The number of train_xx, unlabeled_xx to
+        create.
+        n_interval=1: Create one set based on start_frac
+        n_interval=2: Create two sets based on start_frac and end_frac
+        n_interval>2: Create n_interval sets starting with start_frac, ending
+        end_frac and evenly splitting the data in the other n_interval - 2
+    :return:
+    """
+    # Check validity and copy validation and test_sets
+    if os.path.isdir(input_dir) and os.path.isdir(output_dir):
+        train_input = os.path.join(input_dir, "train.txt")
+        val_input = os.path.join(input_dir, "val.txt")
+        test_input = os.path.join(input_dir, "test.txt")
+        unlabeled_input = os.path.join(input_dir, "unlabeled.txt")
+
+        val_output = os.path.join(output_dir, "val.txt")
+        test_output = os.path.join(output_dir, "test.txt")
+
+        copy2(val_input, val_output)
+        copy2(test_input, test_output)
+    else:
+        raise ValueError("Given directories must be valid.")
+
+    # Compute the fractions of the training data that need to be split
+    split_fracs = [start_frac]
+    if n_interval > 2:
+        inner_intervals = n_interval - 1
+        interval_frac = (end_frac - start_frac) / inner_intervals
+        for i in range(1, n_interval - 1):
+            split_fracs.append(round(start_frac + interval_frac * i, 2))
+    if n_interval >= 2:
+        split_fracs.append(end_frac)
+    print(split_fracs)
+
+    # Read the training and unlabeled data
+    train_data = []
+    with open(train_input, "r") as train_file:
+        train_data = train_file.readlines()
+
+    unlabeled_data = []
+    with open(unlabeled_input, "r") as unlabeled_file:
+        unlabeled_data = unlabeled_file.readlines()
+    n_train = len(train_data)
+
+    # Write the training and unlabeled sets for different fractions of data
+    for i, frac in enumerate(split_fracs):
+        index = int(n_train*frac)
+        train_name = "train_" + str(frac) + ".txt"
+        train_output = os.path.join(output_dir, train_name)
+
+        unlabeled_name = "unlabeled_" + str(frac) + ".txt"
+        unlabeled_output = os.path.join(output_dir, unlabeled_name)
+
+        with open(train_output, "w") as train_file:
+            train_file.writelines(train_data[:index])
+
+        with open(unlabeled_output, "w") as unlabeled_file:
+            unlabeled_file.writelines(unlabeled_data)
+            unlabeled_file.writelines(train_data[index:])
+
+
 def order_labeled(path):
     """
     Filters subdirectories of the given path on whether they contain labeled or
@@ -201,7 +283,7 @@ def change_paths(input, output, to_replace, replacement):
 
 if __name__ == '__main__':
     path = '/home/joschi/Documents/Studium/Masterarbeit/cvmlfs/data/insect_camera_trap/labeled/dynamic_vision/'
-    split_dataset(path, split_mode='seq', shuffle_img=True)
+    #split_dataset(path, split_mode='seq', shuffle_img=True)
 
     """
     # Load broken files from remote network
@@ -223,5 +305,9 @@ if __name__ == '__main__':
             os.remove(dest_list[i])
         copy2(source_list[i], dest_list[i])
     """
+    input_dir = path
+    output_dir = os.path.join(input_dir, "random_dataset")
+    random_dataset(input_dir, output_dir)
+
 
 
