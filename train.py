@@ -57,7 +57,7 @@ def train(hyp, opt, device, tb_writer=None):
     assert len(names) == nc, '%g names found for nc=%g dataset in %s' % (len(names), nc, opt.data)  # check
 
     # Create Model
-    model = Darknet(opt.cfg).to(device)
+    model = Darknet(opt.cfg, verbose=False).to(device)  # todo delete verbose
 
     # Load pretrained weights
     pretrained_ckpt = weights.endswith('.pt')
@@ -303,6 +303,7 @@ def train(hyp, opt, device, tb_writer=None):
                 results, maps, times = test.test(opt.data,
                                                  batch_size=batch_size,
                                                  imgsz=imgsz_test,
+                                                 conf_thres=0.05,
                                                  save_json=final_epoch and opt.data.endswith(os.sep + 'coco.yaml'),
                                                  model=ema.ema.module if hasattr(ema.ema, 'module') else ema.ema,
                                                  single_cls=opt.single_cls,
@@ -452,7 +453,7 @@ if __name__ == '__main__':
                 'obj_pw': (1, 0.5, 2.0),  # obj BCELoss positive_weight
                 'iou_t': (0, 0.1, 0.7),  # IoU training threshold
                 'anchor_t': (1, 2.0, 8.0),  # anchor-multiple threshold
-                'fl_gamma': (0, 0.0, 2.0),  # focal loss gamma (efficientDet default gamma=1.5)
+                'fl_gamma': (1, 0.0, 2.0),  # focal loss gamma (efficientDet default gamma=1.5)
                 'hsv_h': (1, 0.0, 0.1),  # image HSV-Hue augmentation (fraction)
                 'hsv_s': (1, 0.0, 0.9),  # image HSV-Saturation augmentation (fraction)
                 'hsv_v': (1, 0.0, 0.9),  # image HSV-Value augmentation (fraction)
@@ -463,7 +464,8 @@ if __name__ == '__main__':
                 'perspective': (1, 0.0, 0.001),  # image perspective (+/- fraction), range 0-0.001
                 'flipud': (0, 0.0, 1.0),  # image flip up-down (probability)
                 'fliplr': (1, 0.0, 1.0),  # image flip left-right (probability)
-                'mixup': (1, 0.0, 1.0)}  # image mixup (probability)
+                'mixup': (1, 0.0, 1.0),  # image mixup (probability)
+                'mosaic': (1, 0.5, 1.0)}  # image mosaic (probability)
 
         assert opt.local_rank == -1, 'DDP mode not implemented for --evolve'
         opt.notest, opt.nosave = True, True  # only test/save final epoch
@@ -472,7 +474,14 @@ if __name__ == '__main__':
         if opt.bucket:
             os.system('gsutil cp gs://%s/evolve.txt .' % opt.bucket)  # download evolve.txt if exists
 
-        for _ in range(100):  # generations to evolve
+        n_iters = 100
+        if os.path.exists('evolve.txt'):
+            with open('evolve.txt', 'r') as evolve_file:
+                n_lines = len(evolve_file.readlines())
+                n_iters = min(n_iters, 100 - n_lines)
+        print("######## Number of evolve iterations:", n_iters, "#########")
+
+        for _ in range(n_iters):  # generations to evolve
             if os.path.exists('evolve.txt'):  # if evolve.txt exists: select best hyps and mutate
                 # Select parent(s)
                 parent = 'single'  # parent selection method: 'single' or 'weighted'
