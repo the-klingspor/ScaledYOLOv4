@@ -1,6 +1,3 @@
-
-
-
 import numpy as np
 from sklearn.metrics.pairwise import euclidean_distances, cosine_distances
 from sklearn.utils.extmath import stable_cumsum
@@ -23,62 +20,22 @@ def top(scores, paths):
     return paths_sorted
 
 
-def kmpp(features, scores, paths):
+def kmpp(features, scores, n_clusters, paths):
+    queries, query_paths = sample(features, scores, n_clusters)
     return
 
 
-def core_set(features, scores, paths):
+def core_set(features, scores, n_clusters, paths):
     return
 
 
-def _k_init(X, n_clusters, x_squared_norms, random_state, n_local_trials=None):
-    """Init n_clusters seeds according to k-means++
-    Parameters
-    ----------
-    X : {ndarray, sparse matrix} of shape (n_samples, n_features)
-        The data to pick seeds for. To avoid memory copy, the input data
-        should be double precision (dtype=np.float64).
-    n_clusters : int
-        The number of seeds to choose
-    x_squared_norms : ndarray of shape (n_samples,)
-        Squared Euclidean norm of each data point.
-    random_state : RandomState instance
-        The generator used to initialize the centers.
-        See :term:`Glossary <random_state>`.
-    n_local_trials : int, default=None
-        The number of seeding trials for each center (except the first),
-        of which the one reducing inertia the most is greedily chosen.
-        Set to None to make the number of trials depend logarithmically
-        on the number of seeds (2+log(k)); this is the default.
-    Notes
-    -----
-    Selects initial cluster centers for k-mean clustering in a smart way
-    to speed up convergence. see: Arthur, D. and Vassilvitskii, S.
-    "k-means++: the advantages of careful seeding". ACM-SIAM symposium
-    on Discrete algorithms. 2007
-    Version ported from http://www.stanford.edu/~darthur/kMeansppTest.zip,
-    which is the implementation used in the aforementioned paper.
-
-    This implementation of kmpp has been taken from Scikit-learn's k-means
-    implementation. It was adjusted to allow non-random core-set selection and
-    scaling based on precomputed scores.
-
-    Authors: Gael Varoquaux <gael.varoquaux@normalesup.org>
-             Thomas Rueckstiess <ruecksti@in.tum.de>
-             James Bergstra <james.bergstra@umontreal.ca>
-             Jan Schlueter <scikit-learn@jan-schlueter.de>
-             Nelle Varoquaux
-             Peter Prettenhofer <peter.prettenhofer@gmail.com>
-             Olivier Grisel <olivier.grisel@ensta.org>
-             Mathieu Blondel <mathieu@mblondel.org>
-             Robert Layton <robertlayton@gmail.com>
-    License: BSD 3 clause
-    """
+def sample(X, scores, n_clusters, n_local_trials=None, randomized=False):
     n_samples, n_features = X.shape
-
+    x_squared_norms = np.sum(features**2, axis=1)
     centers = np.empty((n_clusters, n_features), dtype=X.dtype)
+    center_ids = np.empty(n_clusters, dtype=np.int)
 
-    assert x_squared_norms is not None, 'x_squared_norms None in _k_init'
+    assert x_squared_norms is not None, 'x_squared_norms None in sample'
 
     # Set the number of local seeding trials if none is given
     if n_local_trials is None:
@@ -87,43 +44,65 @@ def _k_init(X, n_clusters, x_squared_norms, random_state, n_local_trials=None):
         # that it helped.
         n_local_trials = 2 + int(np.log(n_clusters))
 
+    # Pick first center according to given score
+    if scores is not None:
+        center_id = np.argmax(scores)
     # Pick first center randomly
-    center_id = random_state.randint(n_samples)
+    else:
+        center_id = np.random.randint(n_samples)
+        # if all elements have the same score, scoring is basically ignored
+        scores = np.ones(n_samples)
     centers[0] = X[center_id]
+    center_ids[0] = center_id
 
     # Initialize list of closest distances and calculate current potential
-    closest_dist_sq = euclidean_distances(
-        centers[0, np.newaxis], X, Y_norm_squared=x_squared_norms,
-        squared=True)
-    current_pot = closest_dist_sq.sum()
+    closest_dist = euclidean_distances(
+        centers[0, np.newaxis], X, Y_norm_squared=x_squared_norms)
+    closest_dist = np.squeeze(closest_dist)
+    # Potential is minimum distance to current cluster centers multiplied with
+    # the score
+    current_pot = closest_dist * scores
+
+    rng = np.random.default_rng()
 
     # Pick the remaining n_clusters-1 points
     for c in range(1, n_clusters):
-        # Choose center candidates by sampling with probability proportional
-        # to the squared distance to the closest existing center
-        rand_vals = random_state.random_sample(n_local_trials) * current_pot
-        candidate_ids = np.searchsorted(stable_cumsum(closest_dist_sq),
-                                        rand_vals)
-        # XXX: numerical imprecision can result in a candidate_id out of range
-        np.clip(candidate_ids, None, closest_dist_sq.size - 1,
-                out=candidate_ids)
+        if randomized:  # kmpp
+            # Choose center candidates by sampling with probability proportional
+            # to the distance to the current potential
+            p = current_pot / np.sum(current_pot)
+            candidate_ids = rng.choice(n_samples, n_local_trials, replace=False,
+                                       p=p)
+
+            # Choose candidate with highest current potential
+            candidates_pot = current_pot[candidate_ids]
+            best_candidate = candidate_ids[np.argmax(candidates_pot)]
+        else:  # core-set
+            best_candidate = np.argmax(current_pot)
 
         # Compute distances to center candidates
-        distance_to_candidates = euclidean_distances(
-            X[candidate_ids], X, Y_norm_squared=x_squared_norms, squared=True)
+        distance_to_best_candidate = euclidean_distances(
+            X[best_candidate, np.newaxis], X, Y_norm_squared=x_squared_norms)
+        distance_to_best_candidate = np.squeeze(distance_to_best_candidate)
 
         # update closest distances squared and potential for each candidate
-        np.minimum(closest_dist_sq, distance_to_candidates,
-                   out=distance_to_candidates)
-        candidates_pot = distance_to_candidates.sum(axis=1)
-
-        # Decide which candidate is the best
-        best_candidate = np.argmin(candidates_pot)
-        current_pot = candidates_pot[best_candidate]
-        closest_dist_sq = distance_to_candidates[best_candidate]
-        best_candidate = candidate_ids[best_candidate]
+        np.minimum(closest_dist, distance_to_best_candidate, out=closest_dist)
+        current_pot = closest_dist * scores
 
         # Permanently add best center candidate found in local tries
         centers[c] = X[best_candidate]
+        center_ids[c] = best_candidate
 
-    return centers
+    return centers, center_ids
+
+
+if __name__ == '__main__':
+    features = np.array([[2.0, 4.0], [1.0, 5.0], [4.0, 3.0], [1.0, 2.0],
+                         [4.0, 2.0], [5.0, 9.0]])
+    scores = np.array([6.0, 5.0, 4.0, 3.0, 2.0, 1.5])
+
+    centers, center_ids = sample(features, scores, 4)
+    print(centers)
+
+    centers, center_ids = sample(features, scores, 4, randomized=True)
+    print(centers)

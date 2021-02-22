@@ -21,11 +21,13 @@ from models.experimental import *
 from utils.datasets import *
 from utils.general import *
 
+
 def load_classes(path):
     # Loads *.names file at 'path'
     with open(path, 'r') as f:
         names = f.read().split('\n')
     return list(filter(None, names))  # filter removes empty strings (such as last line)
+
 
 def detect(save_img=False):
     out, source, weights, view_img, save_txt, imgsz, cfg, names = \
