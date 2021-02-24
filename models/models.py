@@ -290,8 +290,10 @@ class Darknet(nn.Module):
         self.info(verbose) if not ONNX_EXPORT else None  # print model description
         self.backbone_index = self.module_defs[0].get('backbone_index')
 
-    def forward(self, x, augment=False, verbose=False):
-        if not augment:
+    def forward(self, x, augment=False, verbose=False, backbone=False):
+        if backbone:  # backbone output
+            return self.forward_backbone(x), None
+        elif not augment:  # bounding box inference without augmentation
             return self.forward_once(x, verbose=verbose)
         else:  # Augment images (inference and test only) https://github.com/ultralytics/yolov3/issues/931
             img_size = x.shape[-2:]  # height, width
