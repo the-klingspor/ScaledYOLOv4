@@ -1,24 +1,24 @@
 import numpy as np
 
 
-def entropy_scores(pred, aggr="sum", bb=True):
+def entropy_scores(pred, aggr="sum"):
     """
     Compute the entropy of the given object detection prediction. "aggr" is
     the strategy used for aggregating the entropy of bounding box predictions.
     The available strategies are "max", "sum" and "average".
 
-    :param pred: Array of shape [n_bboxs, xywh + objectness + n_classes]
+    :param pred: Array of shape [n_bboxs] or [n_bboxes, n_classes]
         The predictions of the network used to determine their entropy.
     :param aggr: String, default="sum". One of {"max", "avg", "sum"}
         The aggregate function to be used.
     :return: Float
         The entropy of the prediction for the given aggregate function.
     """
-    # extract the class probabilities and the objectness
-    cl_probs = pred[:, 4:]
-    if not bb:  # for easy tests without bounding box predictions
-        cl_probs = pred
-    entropy_arr = entropy(cl_probs)
+    x = pred
+    if x.ndim == 1:  # single class or objectness
+        entropy_arr = entropy_bern(x)
+    else:  # multiple classes
+        entropy_arr = entropy(x)
 
     # aggregate the entropy values based on the given mode
     entropy_score = apply_aggr(entropy_arr, aggr=aggr)
@@ -26,42 +26,42 @@ def entropy_scores(pred, aggr="sum", bb=True):
     return entropy_score
 
 
-def mutual_info_scores(pred_student, pred_teacher, aggr="avg", bb=True):
+def jensen_shannon_scores(pred_student, pred_teacher, aggr="avg", bb=True):
     """
-    Compute the mutual information of the student and teacher predictions using
-    the specified aggregate function. The mutual information is defined as
-    the entropy of the average of predictions minus the average of individual
-    entropy values of student and teacher.
+    Compute the Jensen-Shannon divergence of the student and teacher predictions
+    using the specified aggregate function. The Jensen-Shannon divergence is
+    defined as the entropy of the average of predictions minus the average of
+    individual entropy values of student and teacher.
     "aggr" is the strategy used for aggregating the entropy of bounding box
-    predictions. The available strategies are "max" and "average".
+    predictions. The available strategies are "max", "avg" and "sum".
 
-    :param pred_student: Array of shape [n_bboxs, xywh + objectness + n_classes]
+    :param pred_student: Array of shape [n_bboxs] or [n_bboxs, n_classes]
         The predictions of the student network.
-    :param pred_teacher: Array of shape [n_bboxs, xywh + objectness + n_classes]
+    :param pred_teacher: Array of the same shape as pred_student
         The predictions of the teacher network.
     :param aggr: String, default="avg". One of {"max", "avg", "sum}
         The aggregate function to be used.
     :return: Float
         The mutual information between the student and teacher predictions.
     """
-    cl_probs_student = pred_student[:, 4:]
-    cl_probs_teacher = pred_teacher[:, 4:]
-    if not bb:  # for easy tests without bounding box preds
-        cl_probs_student = pred_student
-        cl_probs_teacher = pred_teacher
-    cl_probs_avg = (cl_probs_student + cl_probs_teacher) / 2.0
-    entropy_avg = entropy(cl_probs_avg)
+    pred_avg = (pred_student + pred_teacher) / 2.0
+    if pred_student.ndim == 1:  # single class or objectness
+        entropy_avg = entropy_bern(pred_avg)
+        entropy_student = entropy_bern(pred_student)
+        entropy_teacher = entropy_bern(pred_teacher)
+    else:  # multiple classes
+        entropy_avg = entropy(pred_avg)
+        entropy_student = entropy(pred_student)
+        entropy_teacher = entropy(pred_teacher)
 
-    entropy_student = entropy(cl_probs_student)
-    entropy_teacher = entropy(cl_probs_teacher)
     avg_of_entropy = (entropy_student + entropy_teacher) / 2.0
 
-    mutual_info_arr = entropy_avg - avg_of_entropy
+    jensen_shannon_arr = entropy_avg - avg_of_entropy
 
     # aggregate the entropy values based on the given mode
-    mutual_info = apply_aggr(mutual_info_arr, aggr=aggr)
+    jensen_shannon = apply_aggr(jensen_shannon_arr, aggr=aggr)
 
-    return mutual_info
+    return jensen_shannon
 
 
 def apply_aggr(scores, aggr):
@@ -76,7 +76,7 @@ def apply_aggr(scores, aggr):
     return score
 
 
-def entropy(arr, eps=1e-10):
+def entropy_bern(arr, eps=1e-10):
     """
     Compute the element-wise entropy by interpreting every entry as Bernoulli
     random variable.
@@ -89,6 +89,105 @@ def entropy(arr, eps=1e-10):
     return -(arr * np.log2(arr + eps) + (1 - arr) * np.log2(1 - arr + eps))
 
 
+def entropy(arr, eps=1e-10, axis=1):
+    """
+    Compute the entropy along the given axis.
+
+    :param arr: np array of floats [n_values, n_classes]
+    :param eps: float, default = 1e-10
+        Epsilon to prevent logarithm for zero values.
+    :return: The array with the entropy in every element
+    """
+    entropy_vals = -(arr * np.log2(arr + eps))
+    return np.sum(entropy_vals, axis=axis)
+
+
+def scale_lin(x, conf_thres=0.1, target=0.5):
+    """
+    Scale x so that conf_thres -> target with a linear function. Sets conf_thres ->
+    0.5 and interpolates linearly for values above and below.
+    :param x: float
+    :param conf_thres: float, default=0.1
+        The value to map to the target.
+    :param target: float, default=0.5
+        The value to which conf_thres should be mapped
+    :return: float
+        Transformed x.
+    """
+    if x <= conf_thres:
+        return (target / conf_thres) * x
+    else:
+        return target + ((1 - target) / (1 - conf_thres)) * (x - conf_thres)
+
+
+v_scale_lin = np.vectorize(scale_lin)
+
+
+def scale_sigmoid(x, conf_thres=0.1, k=0.1):
+    """
+    Scale x so that conf_thres -> 0.5 with a sigmoid function. This gives poor
+    approximations for conf_tres close to 0 and 1.
+    :param x: float
+    :param conf_thres: float, default=0.1
+        The value to map to 0.5.
+    :param k: float, default=0.1
+        The slope parameter of the sigmoid function.
+    :return: Float
+        Transformed x.
+    """
+    s = 1 / (1 + np.exp(-(x - conf_thres) / k))
+    return s
+
+
+v_scale_sigmoid = np.vectorize(scale_sigmoid)
+
+
+def solve_minkowski(conf_thres, p=1.0, min=1e-10, max=1e5, eps=1e-5):
+    """
+    Find the value p for which (conf_thres - 1, 0.5) lies on the unit-circle of
+    the Minkowski-p distance.
+
+    :param conf_thres:
+    :param p: float, default = 1.0
+        Starting value for the Minkowski parameter.
+    :param min: float, default = 1e-10
+        Left border of possible p params.
+    :param max: float, default = 1e5
+        Right border of possible p params.
+    :param eps: float, default = 1e-5
+        How close the computed Minkowski distance for the current p has to be
+        to the unit circle to be accepted as final result.
+    :return:
+    """
+    mink_dist = abs(conf_thres - 1)**p + 0.5**p
+    if abs(mink_dist - 1) < eps:
+        return p
+    elif mink_dist < 1:
+        p_new = (p + min) / 2
+        return solve_minkowski(conf_thres, p=p_new, min=min, max=p, eps=eps)
+    else:
+        p_new = (p + max) / 2
+        return solve_minkowski(conf_thres, p=p_new, min=p, max=max, eps=eps)
+
+
+def v_scale_mink(x, conf_thres=0.1):
+    """
+    Scales the array x to [0,1] such that the scaled result of every value lies
+    on a unit circle of the Minkowski-p distance such that (conf_thres - 1, 0.5)
+    lies on it as well.
+
+    :param x: Array of floats
+    :param conf_thres: float, default=0.1
+        The value to scale to 0.5
+    :return: Array of floats
+        The scaled x values.
+    """
+    p = solve_minkowski(conf_thres)
+    x_mink = (1 - abs(x - 1)**p)**(1 / p)
+
+    return x_mink
+
+
 if __name__ == '__main__':
     pred_student = np.array([[0.6, 0.4], [0.4, 0.6], [0.1, 0.9]])
     pred_teacher = np.array([[0.5, 0.5], [0.5, 0.5], [0.5, 0.5]])
@@ -98,17 +197,28 @@ if __name__ == '__main__':
     print(entropy(pred_teacher))
     print(entropy(pred_student2))
     print()
-    print(entropy_scores(pred_student, bb=False))
-    print(entropy_scores(pred_teacher, bb=False))
+    print(entropy_bern(pred_student[:, 0]))
+    print(entropy_bern(pred_teacher[:, 0]))
     print()
-    print(mutual_info_scores(pred_student, pred_teacher, bb=False))
-    print(mutual_info_scores(pred_student2, pred_teacher, bb=False))
-    print(mutual_info_scores(pred_student, pred_student2, bb=False))
-    print(mutual_info_scores(pred_student, pred_student, bb=False))
+    print(entropy_scores(pred_student))
+    print(entropy_scores(pred_teacher))
+    print()
+    print(jensen_shannon_scores(pred_student, pred_teacher))
+    print(jensen_shannon_scores(pred_student2, pred_teacher))
+    print(jensen_shannon_scores(pred_student, pred_student2))
+    print(jensen_shannon_scores(pred_student, pred_student))
 
     pred_student = np.array([[0.1, 0.3, 0.6], [0.5, 0.2, 0.3]])
     pred_teacher = np.array([[0.33, 0.33, 0.33], [0.33, 0.33, 0.33]])
 
-    print(mutual_info_scores(pred_student, pred_teacher, bb=False))
+    print(jensen_shannon_scores(pred_student, pred_teacher))
+    print()
+
+    obj = np.array([0.1, 0.001, 0.5])
+    conf_thres = 0.1
+    obj_mink = v_scale_mink(obj, conf_thres)
+    print(obj_mink)
+    print(entropy_bern(obj))
+    print(entropy_bern(obj_mink))
 
 
