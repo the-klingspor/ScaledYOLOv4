@@ -279,6 +279,7 @@ class Darknet(nn.Module):
         super(Darknet, self).__init__()
 
         self.module_defs = parse_model_cfg(cfg)
+        self.backbone_index = self.module_defs[0].get('backbone_index')  # net params get popped in create_modules
         self.module_list, self.routs = create_modules(self.module_defs, img_size, cfg)
         self.yolo_layers = get_yolo_layers(self)
         self.verbose = verbose
@@ -288,12 +289,9 @@ class Darknet(nn.Module):
         self.version = np.array([0, 2, 5], dtype=np.int32)  # (int32) version info: major, minor, revision
         self.seen = np.array([0], dtype=np.int64)  # (int64) number of images seen during training
         self.info(verbose) if not ONNX_EXPORT else None  # print model description
-        self.backbone_index = self.module_defs[0].get('backbone_index')
 
-    def forward(self, x, augment=False, verbose=False, backbone=False):
-        if backbone:  # backbone output
-            return self.forward_backbone(x), None
-        elif not augment:  # bounding box inference without augmentation
+    def forward(self, x, augment=False, verbose=False):
+        if not augment:  # bounding box inference without augmentation
             return self.forward_once(x, verbose=verbose)
         else:  # Augment images (inference and test only) https://github.com/ultralytics/yolov3/issues/931
             img_size = x.shape[-2:]  # height, width
@@ -319,11 +317,11 @@ class Darknet(nn.Module):
             #     y[i] = yi
 
             y = torch.cat(y, 1)
-            return y, None
+            return y, None, None
 
     def forward_once(self, x, augment=False, verbose=False):
         img_size = x.shape[-2:]  # height, width
-        yolo_out, out = [], []
+        yolo_out, out, backbone_out = [], [], []
         if verbose:
             print('0', x.shape)
             str = ''
@@ -350,6 +348,10 @@ class Darknet(nn.Module):
             else:  # run module directly, i.e. mtype = 'convolutional', 'upsample', 'maxpool', 'batchnorm2d' etc.
                 x = module(x)
 
+            if i == self.backbone_index:
+                # save globally pooled backbone layer output
+                backbone_out = torch.squeeze(torch.max_pool2d(x, kernel_size=x.size()[2:]))
+
             out.append(x if self.routs[i] else [])
             if verbose:
                 print('%g/%g %s -' % (i, len(self.module_list), name), list(x.shape), str)
@@ -369,32 +371,8 @@ class Darknet(nn.Module):
                 x[1][..., 0] = img_size[1] - x[1][..., 0]  # flip lr
                 x[2][..., :4] /= s[1]  # scale
                 x = torch.cat(x, 1)
-            return x, p
+            return x, p, backbone_out
 
-    def forward_backbone(self, x):
-        # Return the pooled output for the batch x for the specified index of
-        # the last backbone layer.
-        assert self.backbone_index, "Backbone index must exist."
-        out = []
-        yolo_out = []
-
-        for i in range(self.backbone_index + 1):  # starts at 0
-            module = self.module_list[i]
-            name = module.__class__.__name__
-            if name in ['WeightedFeatureFusion', 'FeatureConcat', 'FeatureConcat2', 'FeatureConcat3',
-                        'FeatureConcat_l']:  # sum, concat
-                x = module(x, out)  # WeightedFeatureFusion(), FeatureConcat()
-            elif name == 'YOLOLayer':
-                yolo_out.append(module(x, out))
-            else:  # run module directly, i.e. mtype = 'convolutional', 'upsample', 'maxpool', 'batchnorm2d' etc.
-                x = module(x)
-
-            out.append(x if self.routs[i] else [])
-
-        # Apply global max pooling to x
-        x = torch.squeeze(torch.max_pool2d(x, kernel_size=x.size()[2:]))
-
-        return x
 
     def fuse(self):
         # Fuse Conv2d + BatchNorm2d layers throughout model
