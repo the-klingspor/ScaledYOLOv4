@@ -115,7 +115,7 @@ def test(data,
         with torch.no_grad():
             # Run model
             t = time_synchronized()
-            inf_out, train_out = model(img, augment=augment)  # inference and training outputs
+            inf_out, train_out, backbone_out = model(img, augment=augment)  # inference, training and backbone outputs
             t0 += time_synchronized() - t
 
             # Compute loss
@@ -126,6 +126,8 @@ def test(data,
             t = time_synchronized()
             output = non_max_suppression(inf_out, conf_thres=conf_thres, iou_thres=iou_thres, merge=merge)
             t1 += time_synchronized() - t
+
+        print("####### Backbone shape: {} ########".format(backbone_out.shape))
 
         # Statistics per image
         for si, pred in enumerate(output):
