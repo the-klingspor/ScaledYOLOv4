@@ -57,7 +57,7 @@ def train(hyp, opt, device, tb_writer=None):
     assert len(names) == nc, '%g names found for nc=%g dataset in %s' % (len(names), nc, opt.data)  # check
 
     # Create Model
-    model = Darknet(opt.cfg, verbose=False).to(device)  # todo delete verbose
+    model = Darknet(opt.cfg, verbose=False).to(device)
 
     # Load pretrained weights
     pretrained_ckpt = weights.endswith('.pt')
@@ -338,7 +338,8 @@ def train(hyp, opt, device, tb_writer=None):
                             'training_results': f.read(),
                             'model': ema.ema.module.state_dict() if hasattr(ema, 'module') else ema.ema.state_dict(),
                             'optimizer': None if final_epoch else optimizer.state_dict()}
-
+                    if opt.save_raw:
+                        ckpt['raw_model'] = model.state_dict()
                 # Save last, best and delete
                 torch.save(ckpt, last)
                 if epoch >= (epochs-5):
@@ -346,6 +347,7 @@ def train(hyp, opt, device, tb_writer=None):
                 if (best_fitness == fi) and not final_epoch:
                     torch.save(ckpt, best)
                 del ckpt
+
         # end epoch ----------------------------------------------------------------------------------------------------
     # end training
 
@@ -395,6 +397,7 @@ if __name__ == '__main__':
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--logdir', type=str, default='runs/', help='logging directory')
+    parser.add_argument('--save_raw', action='store_true', help='save raw weights for Jensen-Shannon div')
     opt = parser.parse_args()
 
     # Resume

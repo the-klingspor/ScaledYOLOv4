@@ -21,12 +21,31 @@ def top(scores, paths):
 
 
 def kmpp(features, scores, n_clusters, paths):
-    queries, query_paths = sample(features, scores, n_clusters)
-    return
+    """
+
+    :param features:
+    :param scores:
+    :param n_clusters:
+    :param paths:
+    :return:
+    """
+    queries, query_indices = sample(features, scores, n_clusters, randomized=True)
+    query_paths = paths[query_indices]
+    return query_paths
 
 
 def core_set(features, scores, n_clusters, paths):
-    return
+    """
+
+    :param features:
+    :param scores:
+    :param n_clusters:
+    :param paths:
+    :return:
+    """
+    queries, query_indices = sample(features, scores, n_clusters, randomized=False)
+    query_paths = paths[query_indices]
+    return query_paths
 
 
 def sample(X, scores, n_clusters, n_local_trials=None, randomized=False):

@@ -64,14 +64,23 @@ def test(data,
 
         # Load model
         model = Darknet(opt.cfg).to(device)
+        raw_model = None
+        if opt.raw_weights:
+            raw_model = Darknet(opt.cfg).to(device)
 
         # load model
         try:
             ckpt = torch.load(weights[0], map_location=device)  # load checkpoint
             ckpt['model'] = {k: v for k, v in ckpt['model'].items() if model.state_dict()[k].numel() == v.numel()}
             model.load_state_dict(ckpt['model'], strict=False)
+            if opt.raw_weights:
+                ckpt['raw_model'] = {k: v for k, v in ckpt['raw_model'].items() if model.state_dict()[k].numel() == v.numel()}
+                raw_model.load_state_dict(ckpt['raw_model'], strict=False)
         except:
             load_darknet_weights(model, weights[0])
+            print("##### Oh no! #######")  # todo allow loading weights of raw model from ckpt
+            if opt.raw_weights:
+                load_darknet_weights(raw_model, weights[0])
         imgsz = check_img_size(imgsz, s=32)  # check img_size
 
     # Half
@@ -254,7 +263,7 @@ def test(data,
         nt = torch.zeros(1)
 
     # Active learning scores and sampling
-    if active:
+    if active and not training:
         scaled_obj = scoring.v_scale_mink(objectness_arr, conf_thres)
         entropy_obj = scoring.v_entropy_scores(scaled_obj)
         top_sample = sampling.top(entropy_obj, path_list)
@@ -323,6 +332,8 @@ if __name__ == '__main__':
     parser.add_argument('--merge', action='store_true', help='use Merge NMS')
     parser.add_argument('--verbose', action='store_true', help='report mAP by class')
     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
+    parser.add_argument('--raw_weights', action='store_true', help='raw_model weights saved in weights path')
+    parser.add_argument('--active', action='store_true', help='save active learning queries')
     parser.add_argument('--cfg', type=str, default='cfg/yolov4.cfg', help='*.cfg path')
     parser.add_argument('--names', type=str, default='data/coco.names', help='*.cfg path')
     opt = parser.parse_args()

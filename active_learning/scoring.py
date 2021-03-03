@@ -93,13 +93,13 @@ def apply_aggr(scores, aggr):
     return score
 
 
-def entropy_bern(arr, eps=1e-7):
+def entropy_bern(arr, eps=1e-6):
     """
     Compute the element-wise entropy by interpreting every entry as Bernoulli
     random variable.
 
     :param arr: np array of floats
-    :param eps: float, default = 1e-10
+    :param eps: float, default = 1e-6
         Epsilon to prevent logarithm for zero values.
     :return: The array with the entropy in every element
     """
