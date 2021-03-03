@@ -18,6 +18,8 @@ from utils.general import (
 from utils.torch_utils import select_device, time_synchronized
 
 from models.models import *
+from active_learning import scoring
+from active_learning import sampling
 
 
 def load_classes(path):
@@ -85,13 +87,36 @@ def test(data,
     iouv = torch.linspace(0.5, 0.95, 10).to(device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
 
+    active = True
+    # Arrays only needed for active learning
+    objectness_arr, backbone_arr, cls_prob_arr = None, None, None
+
     # Dataloader
     if not training:
-        img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
-        _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
         path = data['test'] if opt.task == 'test' else data['val']  # path to val/test images
-        dataloader = create_dataloader(path, imgsz, batch_size, 32, opt,
-                                       hyp=None, augment=False, cache=False, pad=0.5, rect=True)[0]
+        dataloader, dataset = create_dataloader(path, imgsz, batch_size, 32, opt,
+                                                hyp=None, augment=False, cache=False, pad=0.5, rect=True)
+        # Read first image from dataset and append empty dimension
+        img = dataset[0][0][None, ...]
+        img = img.to(device, non_blocking=True)
+        out, _, backbone_out = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
+        # number of bounding box predictions per image and number of output dims (x, y, h, w, obj, cls_1, ..., cls_n)
+        n_bb, n_out = tuple(out.shape[1:])
+        backbone_size = backbone_out.shape[0]
+
+        # Construct empty arrays for the cls, objectness and backbone preds of every img
+        if active:
+            n_img = dataset.n
+            dtype = np.half if half else np.single
+            objectness_arr = np.empty((n_img, n_bb), dtype=dtype)
+            backbone_arr = np.empty((n_img, backbone_size), dtype=dtype)
+
+            n_cls = n_out - 5  # ignore bb shape and objectness
+            if n_cls == 1:  # single class
+                cls_prob_arr = np.empty((n_img, n_bb), dtype=dtype)
+            else:
+                cls_prob_arr = np.empty((n_img, n_bb, n_out - 5), dtype=dtype)
+            path_list = []
 
     seen = 0
     try:
@@ -127,7 +152,18 @@ def test(data,
             output = non_max_suppression(inf_out, conf_thres=conf_thres, iou_thres=iou_thres, merge=merge)
             t1 += time_synchronized() - t
 
-        print("####### Backbone shape: {} ########".format(backbone_out.shape))
+        # Append backbone, objectness and class output to arrays for active learning
+        if active and not training:
+            inf_out_cpu = inf_out.cpu()
+            backbone_cpu = backbone_out.cpu()
+            objectness = inf_out_cpu[:, :, 4]
+            cls_preds = inf_out_cpu[:, :, 5:]
+
+            index = batch_i * batch_size
+            backbone_arr[index:index+batch_size] = backbone_cpu
+            objectness_arr[index:index+batch_size] = objectness
+            cls_prob_arr[index:index+batch_size] = cls_preds.squeeze()
+            path_list.extend(paths)
 
         # Statistics per image
         for si, pred in enumerate(output):
@@ -216,6 +252,14 @@ def test(data,
         nt = np.bincount(stats[3].astype(np.int64), minlength=nc)  # number of targets per class
     else:
         nt = torch.zeros(1)
+
+    # Active learning scores and sampling
+    if active:
+        scaled_obj = scoring.v_scale_mink(objectness_arr, conf_thres)
+        entropy_obj = scoring.v_entropy_scores(scaled_obj)
+        top_sample = sampling.top(entropy_obj, path_list)
+
+        print(entropy_obj[0:3], top_sample[0:3])
 
     # Print results
     pf = '%20s' + '%12.3g' * 6  # print format
