@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def entropy_scores(pred, aggr="sum"):
+def entropy_score(pred, aggr="sum"):
     """
     Compute the entropy of the given object detection prediction. "aggr" is
     the strategy used for aggregating the entropy of bounding box predictions.
@@ -26,7 +26,20 @@ def entropy_scores(pred, aggr="sum"):
     return entropy_score
 
 
-def jensen_shannon_scores(pred_student, pred_teacher, aggr="avg", bb=True):
+def v_entropy_scores(x):
+    """
+    Compute the entropy score for every element in x and
+    :param x:
+    :return:
+    """
+    n = len(x)
+    entropy_scores = []
+    for i in range(n):
+        entropy_scores.append(entropy_score(x[i]))
+    return entropy_scores
+
+
+def jensen_shannon_score(pred_student, pred_teacher, aggr="avg"):
     """
     Compute the Jensen-Shannon divergence of the student and teacher predictions
     using the specified aggregate function. The Jensen-Shannon divergence is
@@ -42,7 +55,8 @@ def jensen_shannon_scores(pred_student, pred_teacher, aggr="avg", bb=True):
     :param aggr: String, default="avg". One of {"max", "avg", "sum}
         The aggregate function to be used.
     :return: Float
-        The mutual information between the student and teacher predictions.
+        The Jensen-Shannon divergence between the student and teacher
+        predictions.
     """
     pred_avg = (pred_student + pred_teacher) / 2.0
     if pred_student.ndim == 1:  # single class or objectness
@@ -64,6 +78,9 @@ def jensen_shannon_scores(pred_student, pred_teacher, aggr="avg", bb=True):
     return jensen_shannon
 
 
+v_jensen_shannon_scores = np.vectorize(jensen_shannon_score)
+
+
 def apply_aggr(scores, aggr):
     if aggr == "max":
         score = np.max(scores)
@@ -76,7 +93,7 @@ def apply_aggr(scores, aggr):
     return score
 
 
-def entropy_bern(arr, eps=1e-10):
+def entropy_bern(arr, eps=1e-7):
     """
     Compute the element-wise entropy by interpreting every entry as Bernoulli
     random variable.
@@ -86,7 +103,8 @@ def entropy_bern(arr, eps=1e-10):
         Epsilon to prevent logarithm for zero values.
     :return: The array with the entropy in every element
     """
-    return -(arr * np.log2(arr + eps) + (1 - arr) * np.log2(1 - arr + eps))
+    x = np.clip(arr, eps, 1.0 - eps)
+    return -(x * np.log2(x) + (1 - x) * np.log2(1 - x))
 
 
 def entropy(arr, eps=1e-10, axis=1):
@@ -193,27 +211,28 @@ if __name__ == '__main__':
     pred_teacher = np.array([[0.5, 0.5], [0.5, 0.5], [0.5, 0.5]])
     pred_student2 = np.array([[0.0, 1.0], [0.0, 1.0], [1.0, 0.0]])
 
+    print("Entropy for every BB:")
     print(entropy(pred_student))
     print(entropy(pred_teacher))
     print(entropy(pred_student2))
-    print()
+    print("\nElementwise Bernoulli entropy:")
     print(entropy_bern(pred_student[:, 0]))
     print(entropy_bern(pred_teacher[:, 0]))
-    print()
-    print(entropy_scores(pred_student))
-    print(entropy_scores(pred_teacher))
-    print()
-    print(jensen_shannon_scores(pred_student, pred_teacher))
-    print(jensen_shannon_scores(pred_student2, pred_teacher))
-    print(jensen_shannon_scores(pred_student, pred_student2))
-    print(jensen_shannon_scores(pred_student, pred_student))
+    print("\nEntropy scores with sum aggregation:")
+    print(entropy_score(pred_student))
+    print(entropy_score(pred_teacher))
+    print("\nJensen-Shannon divergence with avg aggregation:")
+    print(jensen_shannon_score(pred_student, pred_teacher))
+    print(jensen_shannon_score(pred_student2, pred_teacher))
+    print(jensen_shannon_score(pred_student, pred_student2))
+    print(jensen_shannon_score(pred_student, pred_student))
 
     pred_student = np.array([[0.1, 0.3, 0.6], [0.5, 0.2, 0.3]])
     pred_teacher = np.array([[0.33, 0.33, 0.33], [0.33, 0.33, 0.33]])
 
-    print(jensen_shannon_scores(pred_student, pred_teacher))
-    print()
+    print(jensen_shannon_score(pred_student, pred_teacher))
 
+    print("\nTests with Minkowski scaling:")
     obj = np.array([0.1, 0.001, 0.5])
     conf_thres = 0.1
     obj_mink = v_scale_mink(obj, conf_thres)
