@@ -103,20 +103,23 @@ def entropy_bern(arr, eps=1e-6):
         Epsilon to prevent logarithm for zero values.
     :return: The array with the entropy in every element
     """
-    x = np.clip(arr, eps, 1.0 - eps)
+    x = np.array(arr, dtype=np.float)
+    x = np.clip(x, eps, 1.0 - eps)
     return -(x * np.log2(x) + (1 - x) * np.log2(1 - x))
 
 
-def entropy(arr, eps=1e-10, axis=1):
+def entropy(arr, eps=1e-6, axis=1):
     """
     Compute the entropy along the given axis.
 
     :param arr: np array of floats [n_values, n_classes]
-    :param eps: float, default = 1e-10
+    :param eps: float, default = 1e-6
         Epsilon to prevent logarithm for zero values.
     :return: The array with the entropy in every element
     """
-    entropy_vals = -(arr * np.log2(arr + eps))
+    x = np.array(arr, dtype=np.float)
+    x = np.clip(x, eps, 1.0 - eps)
+    entropy_vals = -(x * np.log2(x))
     return np.sum(entropy_vals, axis=axis)
 
 
@@ -201,8 +204,7 @@ def v_scale_mink(x, conf_thres=0.1):
         The scaled x values.
     """
     p = solve_minkowski(conf_thres)
-    x_mink = (1 - abs(x - 1)**p)**(1 / p)
-
+    x_mink = (1 - np.abs(x - 1)**p)**(1 / p)
     return x_mink
 
 
