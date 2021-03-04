@@ -30,7 +30,7 @@ def kmpp(features, scores, n_clusters, paths):
     :return:
     """
     queries, query_indices = sample(features, scores, n_clusters, randomized=True)
-    query_paths = paths[query_indices]
+    query_paths = [paths[i] for i in query_indices]
     return query_paths
 
 
@@ -44,13 +44,13 @@ def core_set(features, scores, n_clusters, paths):
     :return:
     """
     queries, query_indices = sample(features, scores, n_clusters, randomized=False)
-    query_paths = paths[query_indices]
+    query_paths = [paths[i] for i in query_indices]
     return query_paths
 
 
 def sample(X, scores, n_clusters, n_local_trials=None, randomized=False):
     n_samples, n_features = X.shape
-    x_squared_norms = np.sum(features**2, axis=1)
+    x_squared_norms = np.sum(X**2, axis=1)
     centers = np.empty((n_clusters, n_features), dtype=X.dtype)
     center_ids = np.empty(n_clusters, dtype=np.int)
 
