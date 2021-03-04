@@ -96,7 +96,7 @@ def test(data,
     iouv = torch.linspace(0.5, 0.95, 10).to(device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
 
-    active = True
+    active = True if opt.active else False
     # Arrays only needed for active learning
     objectness_arr, backbone_arr, cls_prob_arr = None, None, None
 
@@ -262,14 +262,6 @@ def test(data,
     else:
         nt = torch.zeros(1)
 
-    # Active learning scores and sampling
-    if active and not training:
-        scaled_obj = scoring.v_scale_mink(objectness_arr, conf_thres)
-        entropy_obj = scoring.v_entropy_scores(scaled_obj)
-        top_sample = sampling.top(entropy_obj, path_list)
-
-        print(entropy_obj[0:3], top_sample[0:3])
-
     # Print results
     pf = '%20s' + '%12.3g' * 6  # print format
     print(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
@@ -283,6 +275,18 @@ def test(data,
     t = tuple(x / seen * 1E3 for x in (t0, t1, t0 + t1)) + (imgsz, imgsz, batch_size)  # tuple
     if not training:
         print('Speed: %.1f/%.1f/%.1f ms inference/NMS/total per %gx%g image at batch-size %g' % t)
+
+    # Active learning scores and sampling
+    if active and not training:
+        scaled_obj = scoring.v_scale_mink(objectness_arr, conf_thres)
+        entropy_obj = scoring.v_entropy_scores(scaled_obj)
+        top_sample = sampling.top(entropy_obj, path_list)
+        core_set_sample = sampling.core_set(backbone_arr, entropy_obj, 10, path_list)
+        core_set_no_score = sampling.core_set(backbone_arr, None, 10, path_list)
+        print(top_sample[0:10])
+        print(core_set_sample)
+        print(core_set_no_score)
+
 
     # Save JSON
     if save_json and len(jdict):
