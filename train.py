@@ -53,6 +53,9 @@ def train(hyp, opt, device, tb_writer=None):
         data_dict = yaml.load(f, Loader=yaml.FullLoader)  # model dict
     train_path = data_dict['train']
     test_path = data_dict['val']
+    unlabeled_path = None
+    if opt.semi_supervised:
+        unlabeled_path = data_dict['unlabeled']
     nc, names = (1, ['item']) if opt.single_cls else (int(data_dict['nc']), data_dict['names'])  # number classes, names
     assert len(names) == nc, '%g names found for nc=%g dataset in %s' % (len(names), nc, opt.data)  # check
 
@@ -124,7 +127,7 @@ def train(hyp, opt, device, tb_writer=None):
         del ckpt, state_dict
     
     # Image sizes
-    gs = 32 # grid size (max stride)
+    gs = 32  # grid size (max stride)
     imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
 
     # DP mode
@@ -147,6 +150,13 @@ def train(hyp, opt, device, tb_writer=None):
     dataloader, dataset = create_dataloader(train_path, imgsz, batch_size, gs, opt, hyp=hyp, augment=True,
                                             cache=opt.cache_images, rect=opt.rect, local_rank=rank,
                                             world_size=opt.world_size)
+
+    # Unlabeled loader for semi-supervised training
+    if opt.semi_supervised:
+        dataloader_unl, dataset_unl = create_dataloader(unlabeled_path, imgsz, batch_size, gs, opt, hyp=hyp,
+                                                        augment=True, cache=opt.cache_images, rect=opt.rect,
+                                                        local_rank=rank, world_size=opt.world_size, labeled=False)
+
     mlc = np.concatenate(dataset.labels, 0)[:, 0].max()  # max label class
     nb = len(dataloader)  # number of batches
     assert mlc < nc, 'Label class %g exceeds nc=%g in %s. Possible class labels are 0-%g' % (mlc, nc, opt.data, nc - 1)
@@ -182,7 +192,7 @@ def train(hyp, opt, device, tb_writer=None):
 
     # Start training
     t0 = time.time()
-    nw = max(3 * nb, 1e3)  # number of warmup iterations, max(3 epochs, 1k iterations)
+    nw = max(3 * nb, 1000)  # number of warmup iterations, max(3 epochs, 1k iterations)
     # nw = min(nw, (epochs - start_epoch) / 2 * nb)  # limit warmup to < 1/2 of training
     maps = np.zeros(nc)  # mAP per class
     results = (0, 0, 0, 0, 0, 0, 0)  # 'P', 'R', 'mAP', 'F1', 'val GIoU', 'val Objectness', 'val Classification'
@@ -193,6 +203,9 @@ def train(hyp, opt, device, tb_writer=None):
         print('Using %g dataloader workers' % dataloader.num_workers)
         print('Starting training for %g epochs...' % epochs)
     # torch.autograd.set_detect_anomaly(True)
+    if opt.semi_supervised:
+        dataloader_unl_iter = iter(dataloader_unl)
+
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
 
@@ -217,17 +230,26 @@ def train(hyp, opt, device, tb_writer=None):
         # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
 
-        mloss = torch.zeros(4, device=device)  # mean losses
+        mloss = torch.zeros(5, device=device)  # mean losses, including potential semi-supervised loss
         if rank != -1:
             dataloader.sampler.set_epoch(epoch)
         pbar = enumerate(dataloader)
         if rank in [-1, 0]:
-            print(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'GIoU', 'obj', 'cls', 'total', 'targets', 'img_size'))
+            print(('\n' + '%10s' * 9) % ('Epoch', 'gpu_mem', 'GIoU', 'obj', 'cls', 'unl', 'total', 'targets',
+                                         'img_size'))
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
+
+            if opt.semi_supervised and ni > nw:  # load unlabeled batch
+                try:
+                    imgs_unl, _, _, _ = next(dataloader_unl_iter)
+                except StopIteration:
+                    dataloader_unl_iter = iter(dataloader_unl)
+                    imgs_unl, _, _, _ = next(dataloader_unl_iter)
+                imgs_unl = imgs_unl.to(device, non_blocking=True).float() / 255.0
 
             # Warmup
             if ni <= nw:
@@ -248,6 +270,15 @@ def train(hyp, opt, device, tb_writer=None):
                     ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
                     imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
 
+            if opt.semi_supervised and ni > nw:  # use mean teacher preds as pseudo targets after warmup
+                with torch.no_grad():
+                    pred_ema_unl, _, _ = ema.ema(imgs_unl)
+                    output = non_max_suppression(pred_ema_unl, conf_thres=hyp['ps_conf_thres'], iou_thres=hyp['ps_iou'])
+                    pseudo_labels = output_to_target(output, imgsz, imgsz)
+                    if len(pseudo_labels) > 0:  # predictions are non-empty
+                        pseudo_labels = pseudo_labels[:, :-1]  # slice confidence
+                        pseudo_labels = torch.tensor(pseudo_labels, dtype=torch.float32)
+
             # Autocast
             with amp.autocast(enabled=cuda):
                 # Forward
@@ -255,12 +286,21 @@ def train(hyp, opt, device, tb_writer=None):
 
                 # Loss
                 loss, loss_items = compute_loss(pred, targets.to(device), model)  # scaled by batch_size
-                if rank != -1:
-                    loss *= opt.world_size  # gradient averaged between devices in DDP mode
                 # if not torch.isfinite(loss):
                 #     print('WARNING: non-finite loss, ending training ', loss_items)
                 #     return results
+                loss_unl_pr = torch.tensor([0]).to(device)
+                if opt.semi_supervised and ni > nw and len(pseudo_labels) > 0:
+                    pred_unl = model(imgs_unl)
+                    loss_unl, loss_items_unl = compute_loss(pred_unl, pseudo_labels.to(device), model)
+                    loss_unl *= hyp['unl_loss_w']
+                    loss_items_unl *= hyp['unl_loss_w']
+                    loss_unl_pr = loss_items_unl[-1]
+                    loss += loss_unl
+                loss_items = torch.cat((loss_items[:-1], loss_unl_pr.view(1), loss_unl_pr.view(1) + loss_items[-1]))
 
+                if rank != -1:
+                    loss *= opt.world_size  # gradient averaged between devices in DDP mode
             # Backward
             scaler.scale(loss).backward()
 
@@ -276,7 +316,7 @@ def train(hyp, opt, device, tb_writer=None):
             if rank in [-1, 0]:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                s = ('%10s' * 2 + '%10.4g' * 6) % (
+                s = ('%10s' * 2 + '%10.4g' * 7) % (
                     '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], imgs.shape[-1])
                 pbar.set_description(s)
 
@@ -300,15 +340,15 @@ def train(hyp, opt, device, tb_writer=None):
                 ema.update_attr(model)
             final_epoch = epoch + 1 == epochs
             if not opt.notest or final_epoch:  # Calculate mAP
-                results, maps, times = test.test(opt.data,
-                                                 batch_size=batch_size,
-                                                 imgsz=imgsz_test,
-                                                 conf_thres=0.05,
-                                                 save_json=final_epoch and opt.data.endswith(os.sep + 'coco.yaml'),
-                                                 model=ema.ema.module if hasattr(ema.ema, 'module') else ema.ema,
-                                                 single_cls=opt.single_cls,
-                                                 dataloader=testloader,
-                                                 save_dir=log_dir)
+                results, maps, times, _ = test.test(opt.data,
+                                                    batch_size=batch_size,
+                                                    imgsz=imgsz_test,
+                                                    conf_thres=0.05,
+                                                    save_json=final_epoch and opt.data.endswith(os.sep + 'coco.yaml'),
+                                                    model=ema.ema.module if hasattr(ema.ema, 'module') else ema.ema,
+                                                    single_cls=opt.single_cls,
+                                                    dataloader=testloader,
+                                                    save_dir=log_dir)
 
             # Write
             with open(results_file, 'a') as f:
@@ -398,6 +438,8 @@ if __name__ == '__main__':
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--logdir', type=str, default='runs/', help='logging directory')
     parser.add_argument('--save_raw', action='store_true', help='save raw weights for Jensen-Shannon div')
+    parser.add_argument('--semi_supervised', action='store_true',
+                        help='train semi-supervised with STAC using a mean teacher')
     opt = parser.parse_args()
 
     # Resume
