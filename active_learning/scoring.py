@@ -28,14 +28,14 @@ def entropy_score(pred, aggr="sum"):
 
 def v_entropy_scores(x):
     """
-    Compute the entropy score for every element in x and
+    Compute the entropy score for every element in x.
     :param x:
     :return:
     """
-    n = len(x)
-    entropy_scores = []
+    n = x.shape[0]
+    entropy_scores = np.empty(n)
     for i in range(n):
-        entropy_scores.append(entropy_score(x[i]))
+        entropy_scores[i] = entropy_score(x[i])
     return entropy_scores
 
 
@@ -78,7 +78,13 @@ def jensen_shannon_score(pred_student, pred_teacher, aggr="avg"):
     return jensen_shannon
 
 
-v_jensen_shannon_scores = np.vectorize(jensen_shannon_score)
+def v_jensen_shannon_scores(pred_students, pred_teachers):
+    n = pred_students.shape[0]
+    assert n == pred_teachers.shape[0]
+    jensen_shannon_sc = np.empty(n)
+    for i in range(n):
+        jensen_shannon_sc[i] = jensen_shannon_score(pred_students[i], pred_teachers[i])
+    return jensen_shannon_sc
 
 
 def apply_aggr(scores, aggr):
