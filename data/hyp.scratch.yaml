@@ -9,6 +9,9 @@ weight_decay: 0.0005  # optimizer weight decay 5e-4
 giou: 0.05  # GIoU loss gain
 cls: 0.5  # cls loss gain
 cls_pw: 1.0  # cls BCELoss positive_weight
+unl_loss_w: 2.0  # semi-supervised loss weight
+ps_conf_thres: 0.5  # confidence threshold used for NMS to get pseudo targets
+ps_iou: 0.6  # iou threshold used for NMS to get pseudo targets
 obj: 1.0  # obj loss gain (scale with pixels)
 obj_pw: 1.0  # obj BCELoss positive_weight
 iou_t: 0.20  # IoU training threshold
