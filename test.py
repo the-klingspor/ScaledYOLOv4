@@ -43,7 +43,9 @@ def test(data,
          dataloader=None,
          save_dir='',
          merge=False,
-         save_txt=False):
+         save_txt=False,
+         raw=False,
+         active=False):
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -64,23 +66,25 @@ def test(data,
 
         # Load model
         model = Darknet(opt.cfg).to(device)
-        raw_model = None
-        if opt.raw_weights:
-            raw_model = Darknet(opt.cfg).to(device)
 
         # load model
         try:
             ckpt = torch.load(weights[0], map_location=device)  # load checkpoint
-            ckpt['model'] = {k: v for k, v in ckpt['model'].items() if model.state_dict()[k].numel() == v.numel()}
-            model.load_state_dict(ckpt['model'], strict=False)
-            if opt.raw_weights:
+            if raw:
+                print('Student model:')
                 ckpt['raw_model'] = {k: v for k, v in ckpt['raw_model'].items() if model.state_dict()[k].numel() == v.numel()}
-                raw_model.load_state_dict(ckpt['raw_model'], strict=False)
+                model.load_state_dict(ckpt['raw_model'], strict=False)
+            else:
+                print('Teacher model:')
+                ckpt['model'] = {k: v for k, v in ckpt['model'].items() if model.state_dict()[k].numel() == v.numel()}
+                model.load_state_dict(ckpt['model'], strict=False)
         except:
-            load_darknet_weights(model, weights[0])
-            print("##### Oh no! #######")  # todo allow loading weights of raw model from ckpt
-            if opt.raw_weights:
-                load_darknet_weights(raw_model, weights[0])
+            if raw:
+                print("##### Oh no! #######")  # todo allow loading weights of raw model from ckpt
+                assert False, "No load darknet weights method for raw models implemented yet"
+                load_darknet_weights(model, weights[0])
+            else:
+                load_darknet_weights(model, weights[0])
         imgsz = check_img_size(imgsz, s=32)  # check img_size
 
     # Half
@@ -96,7 +100,6 @@ def test(data,
     iouv = torch.linspace(0.5, 0.95, 10).to(device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
 
-    active = True if opt.active else False
     # Arrays only needed for active learning
     objectness_arr, backbone_arr, cls_prob_arr = None, None, None
 
@@ -276,18 +279,6 @@ def test(data,
     if not training:
         print('Speed: %.1f/%.1f/%.1f ms inference/NMS/total per %gx%g image at batch-size %g' % t)
 
-    # Active learning scores and sampling
-    if active and not training:
-        scaled_obj = scoring.v_scale_mink(objectness_arr, conf_thres)
-        entropy_obj = scoring.v_entropy_scores(scaled_obj)
-        top_sample = sampling.top(entropy_obj, path_list)
-        core_set_sample = sampling.core_set(backbone_arr, entropy_obj, 10, path_list)
-        core_set_no_score = sampling.core_set(backbone_arr, None, 10, path_list)
-        print(top_sample[0:10])
-        print(core_set_sample)
-        print(core_set_no_score)
-
-
     # Save JSON
     if save_json and len(jdict):
         f = 'detections_val2017_%s_results.json' % \
@@ -312,12 +303,22 @@ def test(data,
         except Exception as e:
             print('ERROR: pycocotools unable to run: %s' % e)
 
+    # Append backbone, objectness, class output and paths to output for active learning
+    active_out = None
+    if active and not training:
+        active_out = {
+            "backbone_out" : backbone_arr,
+            "obj_out" : objectness_arr,
+            "cls_out" : cls_prob_arr,
+            "paths_out" : path_list
+        }
+
     # Return results
     model.float()  # for training
     maps = np.zeros(nc) + map
     for i, c in enumerate(ap_class):
         maps[c] = ap[i]
-    return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t
+    return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t, active_out
 
 
 if __name__ == '__main__':
@@ -345,17 +346,73 @@ if __name__ == '__main__':
     opt.data = check_file(opt.data)  # check file
     print(opt)
 
-    if opt.task in ['val', 'test']:  # run normally
-        test(opt.data,
-             opt.weights,
-             opt.batch_size,
-             opt.img_size,
-             opt.conf_thres,
-             opt.iou_thres,
-             opt.save_json,
-             opt.single_cls,
-             opt.augment,
-             opt.verbose)
+    if opt.task in ['val', 'test']:  # run normally (mean teacher)
+        _, _, _, teacher_out = test(opt.data,
+                                    opt.weights,
+                                    opt.batch_size,
+                                    opt.img_size,
+                                    opt.conf_thres,
+                                    opt.iou_thres,
+                                    opt.save_json,
+                                    opt.single_cls,
+                                    opt.augment,
+                                    opt.verbose,
+                                    raw=False,
+                                    active=opt.active)
+        if opt.active:
+            obj_teacher = teacher_out.get('obj_out')
+            cls_teacher = teacher_out.get('cls_out')
+            backbone_teacher = teacher_out.get('backbone_out')
+            path_list_teacher = teacher_out.get('paths_out')
+
+        if opt.raw_weights:  # run student model
+            _, _, _, stud_out = test(opt.data,
+                                     opt.weights,
+                                     opt.batch_size,
+                                     opt.img_size,
+                                     opt.conf_thres,
+                                     opt.iou_thres,
+                                     opt.save_json,
+                                     opt.single_cls,
+                                     opt.augment,
+                                     opt.verbose,
+                                     raw=True,
+                                     active=opt.active)
+            if opt.active:
+                obj_stud = stud_out.get('obj_out')
+                cls_stud = stud_out.get('cls_out')
+                backbone_stud = stud_out.get('backbone_out')
+                path_list_stud = stud_out.get('paths_out')
+
+    # Active learning scores and sampling
+    if opt.active:
+        scaled_obj_teacher = scoring.v_scale_mink(obj_teacher, opt.conf_thres)
+        entropy_obj = scoring.v_entropy_scores(scaled_obj_teacher)
+        top_sample = sampling.top(entropy_obj, path_list_teacher)
+        core_set_sample = sampling.core_set(backbone_teacher, entropy_obj, 10,
+                                            path_list_teacher)
+        core_set_no_score = sampling.core_set(backbone_teacher, None, 10,
+                                              path_list_teacher)
+        print("Top Ent:")
+        print(top_sample[0:10])
+        print("Core-set Ent:")
+        print(core_set_sample)
+        print("Core-set no score:")
+        print(core_set_no_score)
+
+        if opt.raw_weights:
+            scaled_obj_stud = scoring.v_scale_mink(obj_stud, opt.conf_thres)
+            jensen_shannon_div = scoring.v_jensen_shannon_scores(scaled_obj_stud,
+                                                                 scaled_obj_teacher)
+            top_js_sample = sampling.top(jensen_shannon_div, path_list_teacher)
+            core_set_js_sample = sampling.core_set(backbone_teacher,
+                                                   jensen_shannon_div,
+                                                   10,
+                                                   path_list_teacher)
+            print("Top Jensen-Shannon Div:")
+            print(top_js_sample[0:10])
+            print("Core-set Jensen-Shannon Div:")
+            print(core_set_js_sample)
 
     elif opt.task == 'study':  # run over a range of settings and save/plot
         for weights in ['']:
