@@ -29,7 +29,7 @@ for orientation in ExifTags.TAGS.keys():
 
 def get_hash(files):
     # Returns a single hash value of a list of files
-    return sum(os.path.getsize(f) for f in files if os.path.isfile(f))
+    return sum(os.path.getsize(f) for f in files if f and os.path.isfile(f))
 
 
 def exif_size(img):
@@ -48,7 +48,7 @@ def exif_size(img):
 
 
 def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
-                      local_rank=-1, world_size=1):
+                      local_rank=-1, world_size=1, labeled=True):
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache.
     with torch_distributed_zero_first(local_rank):
         dataset = LoadImagesAndLabels(path, imgsz, batch_size,
@@ -58,7 +58,8 @@ def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=Fa
                                       cache_images=cache,
                                       single_cls=opt.single_cls,
                                       stride=int(stride),
-                                      pad=pad)
+                                      pad=pad,
+                                      labeled=labeled)
 
     batch_size = min(batch_size, len(dataset))
     nw = min([os.cpu_count() // world_size, batch_size if batch_size > 1 else 0, 8])  # number of workers
@@ -293,7 +294,7 @@ class LoadStreams:  # multiple IP or RTSP cameras
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, stride=32, pad=0.0):
+                 cache_images=False, single_cls=False, stride=32, pad=0.0, labeled=True):
         try:
             f = []  # image files
             for p in path if isinstance(path, list) else [path]:
@@ -333,18 +334,23 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.mosaic_border = [-img_size // 2, -img_size // 2]
         self.stride = stride
 
-        # Define labels
-        self.label_files = [x.replace('images', 'labels').replace(os.path.splitext(x)[-1], '.txt') for x in
-                            self.img_files]
-
+        if labeled:
+            # Define labels
+            self.label_files = [x.replace('images', 'labels').replace(os.path.splitext(x)[-1], '.txt') for x in
+                                self.img_files]
+        else:
+            self.label_files = [None] * n
         # Check cache
-        cache_path = str(Path(self.label_files[0]).parent) + '.cache'  # cached labels
+        cache_path = str(Path(self.img_files[0]).parent)  # cached labels todo was label_file[0]
+        if not labeled:
+            cache_path += '_unl'
+        cache_path += '.cache'
         if os.path.isfile(cache_path):
             cache = torch.load(cache_path)  # load
             if cache['hash'] != get_hash(self.label_files + self.img_files):  # dataset changed
-                cache = self.cache_labels(cache_path)  # re-cache
+                cache = self.cache_labels(cache_path, labeled=labeled)  # re-cache
         else:
-            cache = self.cache_labels(cache_path)  # cache
+            cache = self.cache_labels(cache_path, labeled=labeled)  # cache
 
         # Get labels
         labels, shapes = zip(*[cache[x] for x in self.img_files])
@@ -428,7 +434,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
             pbar.desc = 'Scanning labels %s (%g found, %g missing, %g empty, %g duplicate, for %g images)' % (
                 cache_path, nf, nm, ne, nd, n)
-        if nf == 0:
+        if labeled and nf == 0:
             s = 'WARNING: No labels found in %s. See %s' % (os.path.dirname(file) + os.sep, help_url)
             print(s)
             assert not augment, '%s. Can not train without labels.' % s
@@ -444,7 +450,8 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 gb += self.imgs[i].nbytes
                 pbar.desc = 'Caching images (%.1fGB)' % (gb / 1E9)
 
-    def cache_labels(self, path='labels.cache'):
+    def cache_labels(self, path='labels.cache', labeled=True):
+        print("##### Labeled: ", labeled)
         # Cache dataset labels, check images and read shapes
         x = {}  # dict
         pbar = tqdm(zip(self.img_files, self.label_files), desc='Scanning images', total=len(self.img_files))
@@ -457,10 +464,10 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 # _ = io.imread(img)  # skimage verify (from skimage import io)
                 shape = exif_size(image)  # image size
                 assert (shape[0] > 9) & (shape[1] > 9), 'image size <10 pixels'
-                if os.path.isfile(label):
+                if labeled and os.path.isfile(label):
                     with open(label, 'r') as f:
                         l = np.array([x.split() for x in f.read().splitlines()], dtype=np.float32)  # labels
-                if len(l) == 0:
+                if not labeled or len(l) == 0:
                     l = np.zeros((0, 5), dtype=np.float32)
                 x[img] = [l, shape]
             except Exception as e:
